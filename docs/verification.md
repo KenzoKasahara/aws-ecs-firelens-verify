@@ -123,7 +123,7 @@ aws-vault exec <profile> -- aws logs get-log-events \
 > バッファが 50 MB を超えると入力が pause（バックプレッシャー）され、50 MB 未満に下がると resume される。  
 > そのため OOMKill は発生せず、ログのドロップが起きる。
 
-- `ROUTER_LOG` に `[input] tcp.1 paused (mem buf overlimit)` が出る
+- `ROUTER_LOG` に `[input] forward.1 paused (mem buf overlimit)` が出る
 - 到達行数 < 100,000（欠落あり）
 - OOMKill は発生しない
 
