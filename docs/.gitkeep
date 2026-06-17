@@ -1,0 +1,389 @@
+---
+title: "【検証】FireLensでログが消える現象を実際に再現してみた（mem buf overlimit / OOMKill）"
+category: "AWS"
+tags:
+  - AWS
+  - ECS
+  - FireLens
+  - FluentBit
+  - 検証
+  - トラブルシューティング
+status: "Draft"
+platform: "qiita"
+verification_status: "実測待ち"
+learning:
+  - 高負荷時に `mem buf overlimit` で input が pause しログが欠落する現象の再現方法
+  - 宛先ダウン時に memoryバッファはOOMし、filesystemバッファは graceful に劣化する挙動の差
+  - FireLens標準のCloudWatchメトリクスは無く、観測はログルーター自身のログと宛先メトリクスで行うこと
+  - filesystemバッファ化（`storage.type filesystem` + `storage.max_chunks_up` 縮小）で欠落が消えることの確認手順
+  - 最小のFargate + log_router構成で上記をローカル創作なしに再現する検証環境の作り方
+created_at: 2026-06-16
+---
+
+> 本記事は詳細版 **「ECSでFluent Bitを導入する理由とログ収集の仕組み（FireLensの内部動作）」**（[`./draft_ecs-firelens-fluentbit.md`](./draft_ecs-firelens-fluentbit.md)）で説明した内部動作の主張を、実際にAWS上で再現・実証するための**検証記事**です。詳細版が「なぜそうなるか」を説明するのに対し、本記事は「本当にそうなるか」を実測で確かめます。
+>
+> 実測値（Fluent Bit / CloudWatch のログ・メトリクス）は人が実環境で取得して貼り込む前提のため、本テンプレートの実測欄は意図的に空欄（`実測待ち`）にしています。
+
+> **🚧 凡例**
+> 🚧 が付いた箇所は **実測待ち**（実環境で取得した値を貼る欄）です。**創作した値は入れません。** 実測後に内容と状態を更新します。
+
+## 検証の狙い
+
+詳細版の主張のうち、**AWS上で再現して観測できる**ものだけを検証対象にします。具体的には以下を実証します。
+
+- メモリバッファ既定で高負荷をかけると `paused (mem buf overlimit)` が出てログが欠落すること。
+- 宛先ダウン時、memoryバッファはOOM、filesystemバッファは graceful に劣化すること。
+- filesystemバッファ化でログ欠落が解消すること。
+- FireLens標準のCloudWatchメトリクスが存在せず、観測はログルーター自身のログと宛先メトリクスに依存すること。
+- 既定で `ecs_*` メタデータがレコードに付与されること（Fargateでは `ec2_instance_id` は付かないこと）。
+
+> 思想・設計判断（例「要件が単純なら awslogs でよい」「FireLensの実体はサイドカー＋設定自動生成」）は概念であり観測対象外のため、本検証からは除外しています。
+
+## 検証マップ（記事の背骨）
+
+詳細版の主張と検証シナリオを1対1で対応させたものです。各行の詳細は後述の「シナリオ別検証」に対応します。
+
+| # | 検証する主張（詳細版由来） | 再現方法 | 証拠（観測すべきもの） | 状態 |
+| :-: | --- | --- | --- | :-: |
+| 1 | 既定で `ecs_*` メタデータ付与（Fargateは `ec2_instance_id` なし） | 通常時に1行出し、CloudWatchイベントを確認 | `ecs_*` キーあり／`ec2_instance_id` 無し | 🚧 |
+| 2 | memory既定で `Mem_Buf_Limit` 超過→input pause→欠落 | 大量ログを短時間に流す | `paused (mem buf overlimit)`／流量＞到達 | 🚧 |
+| 3 | filesystem化すると高負荷でも欠落しない | #2と同じ負荷を filesystem 構成で | `paused` 無し／流量＝到達 | 🚧 |
+| 4 | 宛先ダウン時、memoryはOOMKillで消失 | 宛先書込権限を一時剥奪し流し続ける | retryログ＋停止理由 `OutOfMemory` | 🚧 |
+| 5 | 宛先ダウン時、filesystemは graceful 劣化 | #4と同じ障害を filesystem 構成で | OOMせず滞留→復旧後送信 | 🚧 |
+| 6 | FireLens標準のCloudWatchメトリクスは無い | メトリクスのネームスペースを確認 | FireLens専用NS不在／代替観測のみ | 🚧 |
+| 7 | `storage.max_chunks_up`（既定128）縮小でOOM抑制 | 既定→縮小で同じ負荷を比較 | 既定で高メモリ／縮小後は安定 | 🚧 |
+
+## 検証環境
+
+詳細版「簡易的な検証リソース構成」を土台に、**最小で再現できる構成**を作ります。完全な一式ではなくHCL抜粋です（実検証時に補完してください）。
+
+### 構成要素
+
+- **ECSクラスタ（Fargate）**
+- **タスク定義（2コンテナ）**
+  - `app`（httpd等、`logConfiguration.logDriver: awsfirelens`。大量ログを吐けるもの）
+  - `log_router`（`public.ecr.aws/aws-observability/aws-for-fluent-bit:3`、`firelensConfiguration.type: fluentbit`、`essential: true`）
+  - log_router自身にも `awslogs` を設定し、Fluent Bit のログをCloudWatchに出す（観測の前提）
+- **宛先**: CloudWatch Logs ロググループ ＋ 検証用S3バケット（複数宛先分岐の確認用）
+- **IAM**: タスクロール＝宛先書込権限（CloudWatch Logs / S3）／タスク実行ロール＝ECRプル・log_routerのawslogs用権限（＋S3カスタム設定を使うなら `s3:GetObject`）
+- **セキュリティグループ**: **ポート24224のingressを開けない**
+
+### Terraform 概要（HCL抜粋）
+
+```hcl
+# --- ECS クラスタ（Fargate） ---
+resource "aws_ecs_cluster" "verify" {
+  name = "firelens-verify"
+}
+
+# --- ロググループ（宛先 + log_router自身のログ） ---
+resource "aws_cloudwatch_log_group" "app" {
+  name              = "/aws/ecs/firelens-verify/app"
+  retention_in_days = 1 # 検証用に短く（コスト抑制）
+}
+
+resource "aws_cloudwatch_log_group" "log_router" {
+  name              = "/aws/ecs/firelens-verify/log-router"
+  retention_in_days = 1
+}
+
+# --- 検証用S3（複数宛先分岐の確認） ---
+resource "aws_s3_bucket" "verify_logs" {
+  bucket        = "firelens-verify-logs-REPLACE_ME"
+  force_destroy = true # teardownで中身ごと消す
+}
+
+# --- タスク定義（app + log_router の2コンテナ） ---
+resource "aws_ecs_task_definition" "verify" {
+  family                   = "firelens-verify"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "256"
+  memory                   = "512" # OOM再現のため意図的に小さめにする検証あり
+  task_role_arn            = aws_iam_role.task.arn
+  execution_role_arn       = aws_iam_role.execution.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "app"
+      image     = "httpd:2.4"
+      essential = true
+      logConfiguration = {
+        logDriver = "awsfirelens"
+        options = {
+          Name       = "cloudwatch_logs"
+          region     = "ap-northeast-1"
+          log_group_name = aws_cloudwatch_log_group.app.name
+          auto_create_group = "false"
+          log_stream_prefix = "app-"
+        }
+      }
+    },
+    {
+      name      = "log_router"
+      image     = "public.ecr.aws/aws-observability/aws-for-fluent-bit:3"
+      essential = true
+      firelensConfiguration = {
+        type = "fluentbit"
+        # 検証2/3でカスタム設定に切り替える場合はここで file 指定（Fargateは file のみ）
+        # options = { config-file-type = "file", config-file-value = "/extra.conf" }
+      }
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.log_router.name
+          awslogs-region        = "ap-northeast-1"
+          awslogs-stream-prefix = "fb"
+        }
+      }
+    }
+  ])
+}
+
+# --- IAM（タスクロール：宛先書込 / 実行ロール：プル・awslogs） ---
+# task role: logs:PutLogEvents, logs:CreateLogStream, s3:PutObject 等
+# execution role: AmazonECSTaskExecutionRolePolicy 相当（＋ s3:GetObject はS3カスタム設定時のみ）
+
+# --- セキュリティグループ：24224 の ingress は定義しない（開けない） ---
+resource "aws_security_group" "task" {
+  name   = "firelens-verify-task"
+  vpc_id = var.vpc_id
+  # ingress for 24224 は意図的に作らない（詳細版のセキュリティ注意を踏襲）
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+```
+
+### コスト注意
+
+- Fargateタスク（vCPU/メモリ）・CloudWatch Logs取り込み・S3 PUT/保管に課金されます。**検証は短時間で完了させ、放置しない**こと。
+- ロググループの `retention_in_days` を短く（例: 1日）して保管コストを抑えています。
+- 高負荷再現で大量ログを流すため、CloudWatch Logs取り込み量が増えます。流す量は再現に必要な最小限にしてください。
+
+### Teardown 手順（検証後に確実に消す）
+
+```bash
+# 1. 起動中のサービス/タスクを停止
+aws ecs update-service --cluster firelens-verify --service <svc> --desired-count 0
+# （単発タスク起動なら aws ecs stop-task で停止）
+
+# 2. Terraform で一式破棄（S3は force_destroy で中身ごと削除）
+terraform destroy
+
+# 3. 残存していないか確認（ロググループ・S3バケット・タスク定義）
+aws logs describe-log-groups --log-group-name-prefix /aws/ecs/firelens-verify
+aws s3 ls | grep firelens-verify
+```
+
+### セキュリティ注意（詳細版を踏襲）
+
+- **ポート24224のingressは開けない。** forward input はタスク内のサイドカー間通信であり、外部公開は不要かつ危険です。
+- 検証用に作ったS3バケットはパブリックアクセスをブロックしたまま使うこと。
+- IAM権限の一時剥奪（検証4/5）は**検証用ロールに限定**し、検証後は元に戻す／ロールごと破棄すること。
+
+## シナリオ別検証
+
+各検証は **仮説 → 手順 → 証拠 → 実測結果 → 考察** の順で統一しています。🚧 の欄を実環境の値で埋めてください。
+
+---
+
+### 検証1 ｜ 既定で `ecs_*` メタデータが付与される 🚧
+
+> Fargateでは `ec2_instance_id` が付かないことも併せて確認する。
+
+**仮説（詳細版）** — 既定で各レコードに `ecs_cluster` / `ecs_task_arn` / `ecs_task_definition` が付与される。`ec2_instance_id` はEC2起動タイプのみで、Fargateでは付与されない。`enable-ecs-log-metadata: false` で無効化できる。
+
+**再現手順**
+
+1. 上記Fargate構成でタスクを起動する。
+2. `app` コンテナのstdoutに1行ログを出す。
+3. 宛先のCloudWatch Logsで該当ログイベントのJSONを確認する。
+
+**観測すべき証拠**
+
+- イベントJSONに `ecs_cluster` / `ecs_task_arn` / `ecs_task_definition` が含まれる
+- `ec2_instance_id` が**含まれない**（Fargateのため）
+
+**実測結果**
+
+```text
+（🚧 実測待ち）CloudWatch Logs に届いた実際のログイベントJSONを貼る
+```
+
+> 🚧 **考察（実測待ち）** — `ecs_*` が付与され、Fargateで `ec2_instance_id` が無いことを実測で確認できたか。
+
+---
+
+### 検証2 ｜ `mem buf overlimit` でログが欠落する 🚧
+
+**仮説（詳細版）** — input は既定 `storage.type memory`。`Mem_Buf_Limit` を超えると input が pause され新規レコードは失われる。Fluent Bit ログに `[input] tcp.1 paused (mem buf overlimit)` が出る。
+
+**再現手順**
+
+1. 既定（memoryバッファ）構成のまま、`app` から既知の行数（例: 連番付き）の大量ログを短時間に流す。
+2. log_routerのログ（CloudWatch）に `paused (mem buf overlimit)` が出るか観察する。
+3. 宛先に到達した行数を数え、流した行数との差分（欠落）を確認する。
+
+**観測すべき証拠**
+
+- log_routerログに `[input] ... paused (mem buf overlimit)` が出る
+- 流した行数 ＞ 宛先到達行数（欠落発生）
+
+**実測結果**
+
+```text
+（🚧 実測待ち）log_router の実ログ（paused 行を含む）と、流した行数 / 到達行数 を貼る
+```
+
+> 🚧 **考察（実測待ち）** — paused が出てログ欠落が起きたか。欠落は何行だったか。
+
+---
+
+### 検証3 ｜ filesystemバッファ化で高負荷でも欠落しない 🚧
+
+**仮説（詳細版）** — カスタム設定で `storage.type filesystem` + `threaded true` にすると input をブロックさせず、高スループット時の耐障害性が上がる。
+
+**再現手順**
+
+1. カスタム設定ファイル（`config-file-type: file`、Fargateは `file` のみ）で `[INPUT]` を `storage.type filesystem` + `threaded true`、`[SERVICE]` に `storage.path` / `storage.max_chunks_up 32` を設定する。
+2. 検証2と同じ負荷（同じ行数・同じレート）を流す。
+3. `paused (mem buf overlimit)` が出ないこと、流した行数と宛先到達行数が一致することを確認する。
+
+**観測すべき証拠**
+
+- log_routerログに `paused (mem buf overlimit)` が出ない
+- 流した行数 ＝ 宛先到達行数（欠落なし）
+
+**実測結果**
+
+```text
+（🚧 実測待ち）filesystemバッファ構成での log_router ログと、流した行数 / 到達行数 を貼る
+```
+
+> 🚧 **考察（実測待ち）** — 検証2との差分（欠落が消えたか）。
+
+---
+
+### 検証4 ｜ 宛先ダウン時、memoryバッファはOOMKillで消失 🚧
+
+**仮説（詳細版）** — memoryバッファのまま宛先がダウンするとメモリが枯渇しOOMKill、メモリ上のバッファが消失する。`storage.max_chunks_up` 既定128は1チャンク最大4〜5MBで500MB+消費し得る。
+
+**再現手順**
+
+1. memoryバッファ構成、かつタスクメモリを小さめ（例: 512MB）にする。
+2. タスクIAMロールから宛先書込権限を一時剥奪する（または宛先を到達不能にする）。
+3. ログを流し続け、log_routerの output retry ログと、タスク停止理由を観察する。
+
+**観測すべき証拠**
+
+- log_routerに output retry / chunk failed が出続ける
+- 最終的にタスク停止理由が `OutOfMemory`（OOMKilled）になる
+
+**実測結果**
+
+```text
+（🚧 実測待ち）retry ログ群と、ECSタスクの停止理由（StoppedReason: OutOfMemory 等）を貼る
+```
+
+> 🚧 **考察（実測待ち）** — OOMKillでバッファ消失が起きたか。何分で落ちたか。
+
+---
+
+### 検証5 ｜ 宛先ダウン時、filesystemバッファは graceful に劣化 🚧
+
+**仮説（詳細版）** — filesystemバッファなら宛先ダウン時もディスクにchunkを滞留させ緩やかに劣化（graceful degradation）。再起動でも残存。`storage.total_limit_size` 到達で古いものから破棄。
+
+**再現手順**
+
+1. 検証3のfilesystemバッファ構成にする。
+2. 検証4と同じ障害（宛先書込権限の一時剥奪）を起こす。
+3. OOMせず滞留すること、権限復旧後に滞留分が宛先へ送られることを確認する。
+
+**観測すべき証拠**
+
+- OOMが発生しない／`storage.path` 配下にchunkが滞留する
+- 権限復旧後、滞留分が宛先到達する（あるいは `total_limit_size` 到達分のみ破棄）
+
+**実測結果**
+
+```text
+（🚧 実測待ち）障害中の滞留状況・タスクが落ちないこと・復旧後の到達ログを貼る
+```
+
+> 🚧 **考察（実測待ち）** — memory（検証4）との挙動差。復旧後にどれだけ送られたか。
+
+---
+
+### 検証6 ｜ FireLens標準のCloudWatchメトリクスは無い 🚧
+
+**仮説（詳細版）** — FireLens/Fluent Bit 自体のCloudWatchメトリクスはAWS標準では提供されない。観測はログルーター自身のログと宛先サービス側メトリクスで行う。
+
+**再現手順**
+
+1. CloudWatchメトリクスのネームスペース一覧を確認し、FireLens専用のものが無いことを確認する。
+2. 観測手段として、log_router自身のログ（awslogs）と、宛先メトリクス（Firehose `ThrottledRecords` / `IncomingRecords`、CloudWatch Logs の `PutLogEvents` スロットリング等）が使えることを確認する。
+
+**観測すべき証拠**
+
+- FireLens専用ネームスペース／メトリクスが存在しない
+- 観測がlog_routerログ＋宛先メトリクスに依存することの確認
+
+**実測結果**
+
+```text
+（🚧 実測待ち）list-metrics 等で FireLens 専用メトリクスが無いことの実出力、参照した宛先メトリクスを貼る
+```
+
+> 🚧 **考察（実測待ち）** — 標準メトリクスが無いことを実測で確認できたか。代替観測は十分か。
+
+---
+
+### 検証7 ｜ `storage.max_chunks_up` の縮小でOOMを抑制できる 🚧
+
+**仮説（詳細版）** — `storage.max_chunks_up` の既定は128で、メモリを大きく消費し得る。メモリ制約に応じて縮小（既定128は重い。50MBしか割けないなら8〜10）するとOOMを防げる。
+
+**再現手順**
+
+1. メモリ制約下（小さいタスクメモリ）で、既定 `storage.max_chunks_up 128` のまま大量chunkを溜める。
+2. 次に `storage.max_chunks_up 32`（または 8〜10）へ縮小して同じ負荷をかける。
+3. メモリ使用率とタスク停止有無を比較する。
+
+**観測すべき証拠**
+
+- 既定では高メモリ使用／OOM
+- 縮小後はメモリ使用が抑えられタスクが落ちない
+
+**実測結果**
+
+```text
+（🚧 実測待ち）既定時と縮小時の log_router メモリ使用率・タスク停止有無を貼る
+```
+
+> 🚧 **考察（実測待ち）** — `max_chunks_up` 縮小でOOMが抑えられたか。トレードオフ（バッファ容量減）はあったか。
+
+---
+
+## まとめ
+
+各主張が実測で裏付けられたかを、実測値を取り込んだ後にこの表で記録します。**仮説と実測の不一致があれば、改変せず正直に記述すること**（差異の考察こそ検証記事の価値）。
+
+| 検証 | 主張 | 裏付け |
+| :-: | --- | :-: |
+| 1 | `ecs_*` メタデータ付与 / Fargateで `ec2_instance_id` なし | 🚧 実測待ち |
+| 2 | `mem buf overlimit` でログ欠落 | 🚧 実測待ち |
+| 3 | filesystemバッファ化で欠落解消 | 🚧 実測待ち |
+| 4 | memoryバッファ宛先ダウンでOOMKill | 🚧 実測待ち |
+| 5 | filesystemバッファ宛先ダウンで graceful 劣化 | 🚧 実測待ち |
+| 6 | FireLens標準メトリクス無し | 🚧 実測待ち |
+| 7 | `max_chunks_up` 縮小でOOM抑制 | 🚧 実測待ち |
+
+> すべての 🚧 が埋まったら、Front Matter の `verification_status` を `実測済み` に更新する。
+
+## 関連記事
+
+- 詳細版（内部動作の説明）: [`./draft_ecs-firelens-fluentbit.md`](./draft_ecs-firelens-fluentbit.md)
+- 初級版（かみ砕いた解説）: [`./beginner_draft_ecs-firelens-fluentbit.md`](./beginner_draft_ecs-firelens-fluentbit.md)

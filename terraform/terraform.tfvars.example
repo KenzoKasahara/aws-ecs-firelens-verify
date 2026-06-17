@@ -1,0 +1,15 @@
+aws_region   = "ap-northeast-1"
+project_name = "firelens-verify"
+
+# Existing VPC and subnets (subnets are supplied when running tasks via aws ecs run-task)
+vpc_id = "vpc-xxxxxxxxxxxxxxxxx"
+
+# Must be globally unique — used to form: firelens-verify-logs-<suffix>
+s3_bucket_suffix = "REPLACE_ME"
+
+# Retention is intentionally short to keep costs low during verification
+app_log_retention_days        = 1
+log_router_retention_days     = 1
+
+task_cpu    = "256"
+task_memory = "512"
