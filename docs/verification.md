@@ -121,9 +121,7 @@ aws-vault exec <profile> -- aws logs tail "$APP_LOG" --follow --region "$REGION"
 > **前提**: `terraform.tfvars` で **`app_log_driver_buffer_limit`** を設定して `apply` 済みであること。値の取り方が肝心で、欠落点が直列2段（`app → Docker バッファ(行数) → FB forward input(50MB)`）あるため、次の **2条件を両方**満たす必要がある:
 >
 > 1. **`overlimit` を出す**: `app_log_driver_buffer_limit` を **50MB 相当（10KB 行で約 5,120 行）より大きく**する（例 `8192`）。小さすぎると Docker 段で先に破棄され、FB の forward input が 50MB に達せず `mem buf overlimit` が出ない。逆に既定の `1048576` 行のままだと大きすぎて破棄されず欠落もしない。
-> 2. **欠落を出す**: 投入量 `N`×10KB を **`(50MB + app_log_driver_buffer_limit×10KB)` より十分大きく**する。FB が 50MB で pause している間に Docker バッファが溢れて破棄される。
->
-> 推奨値: `app_log_driver_buffer_limit = 8192`（≒80MB）/ **`N=30000`（≒300MB）** → `overlimit` が出て、おおよそ `300-(50+80)=~170MB` 分が欠落する。**50MB（FB 既定）+ buffer がデフォルト構成での下限**なので、1 run あたり最低 ~200-300MB は要る。これ未満で試すには検証3 同様のカスタム設定で `Mem_Buf_Limit` 自体を下げる必要がある（別途相談）。検証3 も同じ `N`・同じ buffer で実行する（差は `enable_filesystem_buffer` のみ）。
+> 2. **欠落を出す**: 投入量 `N`×10KB を **`(50MB + app_log_driver_buffer_limit × 10KB)` より十分大きく**する。FB が 50MB で pause している間に Docker バッファが溢れて破棄される。
 
 ```bash
 export MSYS_NO_PATHCONV=1       # Windows Git Bashの場合のみ必要
