@@ -316,9 +316,6 @@ aws-vault exec <profile> -- aws cloudwatch get-metric-statistics \
 - 到達行数（`IncomingLogEvents` の Sum）≈ `N`（検証2より明確に増える）
 - ディスク（`storage.path`）にチャンクが滞留し、Fluent Bit 再起動後も残る
 
-> **注（到達行数が増えない場合）**:
-> filesystem 化が効いていても、(1) `get-log-events length(events)` で数えている（1 ページ ~100 件で頭打ち）、(2) 負荷が無限ループで before/after の総量が揃っていない、(3) タスク停止直後で flush 完了前に計測している、のいずれかだと差が出ない。上記手順（固定 `N` 行 + `IncomingLogEvents` の Sum + flush 完了待ち）で計測し直すこと。
-
 #### 結果（検証3）
 
 | 確認項目 | 検証2（memory・before） | 検証3（filesystem・after） |
