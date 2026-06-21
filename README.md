@@ -100,7 +100,7 @@ docker push "$ECR_URL:latest"
 > イメージを push する前にタスクを実行した場合、ECS がイメージを pull できずに起動に失敗する。  
 > 必ず push 後にタスクを実行すること。
 
-**検証3（filesystem バッファ化）を実施する場合**は、`:fs` イメージも追加でビルド & push し、`enable_filesystem_buffer = true` で `terraform apply` する。詳細は [検証手順書](docs/verification.md) の検証3を参照。
+**検証3（filesystem バッファ化）を実施する場合**は、`:fs` イメージも追加でビルド & push し、`enable_filesystem_buffer = true` で `terraform apply` する。詳細は [docs/verification.md](docs/verification.md) の検証3を参照。
 
 ```bash
 docker build -t "$ECR_URL:fs" -f docker/Dockerfile.fs docker/
