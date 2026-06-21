@@ -13,18 +13,21 @@ ECS Fargate タスク上で FireLens (Fluent Bit) サイドカーを使ったロ
 | `log_router` | ECR (`<project>-log-router:latest`) | `awslogs` | CloudWatch Logs (`/aws/ecs/.../log-router`) |
 | `app` | `httpd:2.4` | `awsfirelens` | CloudWatch Logs (`/aws/ecs/.../app`) **+ S3** (`/logs/app/…`) |
 
-`log_router` は `aws-for-fluent-bit:3` をベースにした [docker/Dockerfile](docker/Dockerfile) をビルドして ECR に push して使用する。  
-FireLens が自動生成するベース設定（CloudWatch OUTPUT）に [docker/extra.conf](docker/extra.conf) を `@INCLUDE` し、S3 OUTPUT を追加することでマルチ宛先ルーティングを実現している。
+`log_router` は `aws-for-fluent-bit:3` をベースにしたカスタムイメージをビルドして ECR に push して使用する。`enable_filesystem_buffer` トグルで構成が切り替わる。
+
+- **memory バッファ（既定 / `:latest`）** — [docker/Dockerfile](docker/Dockerfile) をビルド。FireLens が自動生成するベース設定（CloudWatch OUTPUT）に [docker/extra.conf](docker/extra.conf) を `@INCLUDE` し、S3 OUTPUT を追加してマルチ宛先ルーティングを実現する。
+- **filesystem バッファ（検証3 / `:fs`）** — [docker/Dockerfile.fs](docker/Dockerfile.fs) をビルド。`CMD` を上書きして [docker/fluent-bit-fs.conf](docker/fluent-bit-fs.conf)（`storage.type filesystem` の forward input を含むフル設定）を読み込ませる。
 
 ### 主なリソース
 
 | カテゴリ | リソース |
 | --- | --- |
-| コンピュート | `aws_ecs_cluster` (firelens-verify)、`aws_ecs_task_definition` (Fargate) |
+| コンピュート | `aws_ecs_cluster` (firelens-verify)、`aws_ecs_task_definition` (Fargate, 2 コンテナ) |
+| コンテナレジストリ | `aws_ecr_repository` (log_router カスタムイメージ) |
 | セキュリティ | `aws_security_group` (task — ingress なし / egress all) |
-| データストア | `aws_s3_bucket` (multi-dest 検証用ログバケット) |
+| データストア | `aws_s3_bucket` (multi-dest 検証用ログバケット) + public access block |
 | 監視 | `aws_cloudwatch_log_group` × 2 (app / log-router) |
-| IAM | `aws_iam_role` × 2 (task-role / execution-role) |
+| IAM | `aws_iam_role` × 2 (task-role / execution-role) + ポリシー |
 
 ---
 
@@ -54,6 +57,8 @@ cp terraform/terraform.tfvars.example terraform/terraform.tfvars
 | `log_router_retention_days` | `number` | log_router (Fluent Bit) ログの CloudWatch Logs 保持日数 | `1` |
 | `task_cpu` | `string` | ECS タスクの CPU ユニット数 | `"256"` |
 | `task_memory` | `string` | ECS タスクのメモリ量 (MiB) | `"512"` |
+| `log_router_memory_limit` | `number` | log_router コンテナのハードメモリ上限 (MiB)。超過時に OOMKill。`task_memory` 未満であること（既定 `200`） | （任意） |
+| `app_log_driver_buffer_limit` | `number` | 検証2 用。awsfirelens ドライバが Fluent Bit へ渡す前に保持するログ行数（Docker→FB 間の `log-driver-buffer-limit`、AWS 既定 `1048576`）。検証2 では超過分が破棄されるよう小さめにする | `8192` |
 | `enable_filesystem_buffer` | `bool` | 検証3 用トグル。`true` で log_router を filesystem バッファ構成（`:fs` イメージ + フル設定の CMD 上書き）に切り替える。既定 `false` は memory バッファ + `extra.conf` @INCLUDE 方式 | `false` |
 
 ### 2. 初期化
@@ -116,6 +121,9 @@ docker push "$ECR_URL:fs"
 | `app_log_group_name` | app コンテナ出力用 CloudWatch Logs グループ名 |
 | `log_router_log_group_name` | Fluent Bit (log_router) 自身のログ用 CloudWatch Logs グループ名 |
 | `s3_bucket_name` | マルチ送信先ログルーティング検証用 S3 バケット名 |
+| `task_policy_arn` | IAM タスクポリシー ARN |
+| `vpc_id` | ECS タスクのネットワークに使用する VPC ID（サブネット ID 検索に使用） |
+| `ecr_repository_url` | カスタム log_router イメージ用 ECR リポジトリ URL |
 
 ### 6. タスクの手動実行（検証時）
 
@@ -147,6 +155,7 @@ aws-vault exec <profile> -- terraform destroy --auto-approve
 
 | # | 検証内容 | 設定変更 |
 | :-: | --- | --- |
-| 1 | `ecs_*` メタデータ付与 / Fargate で `ec2_instance_id` なし | 不要 |
-| 2 | `mem buf overlimit` でログ欠落 | 不要 |
-| 3 | FireLens 標準 CloudWatch メトリクスは存在しない | 不要 |
+| 1 | `ecs_*` メタデータ付与 / Fargate で `ec2_instance_id` なし | 不要（既定構成） |
+| 2 | `mem buf overlimit` でログ欠落 | `app_log_driver_buffer_limit` を設定（例 `8192`）して `apply` |
+| 3 | filesystem バッファ化でログ欠落が解消 | `enable_filesystem_buffer = true` + `:fs` イメージを push して `apply` |
+| 4 | FireLens 標準 CloudWatch メトリクスは存在しない | 不要 |
