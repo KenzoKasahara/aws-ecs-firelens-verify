@@ -54,6 +54,7 @@ cp terraform/terraform.tfvars.example terraform/terraform.tfvars
 | `log_router_retention_days` | `number` | log_router (Fluent Bit) ログの CloudWatch Logs 保持日数 | `1` |
 | `task_cpu` | `string` | ECS タスクの CPU ユニット数 | `"256"` |
 | `task_memory` | `string` | ECS タスクのメモリ量 (MiB) | `"512"` |
+| `enable_filesystem_buffer` | `bool` | 検証3 用トグル。`true` で log_router を filesystem バッファ構成（`:fs` イメージ + フル設定の CMD 上書き）に切り替える。既定 `false` は memory バッファ + `extra.conf` @INCLUDE 方式 | `false` |
 
 ### 2. 初期化
 
@@ -93,6 +94,13 @@ docker push "$ECR_URL:latest"
 
 > イメージを push する前にタスクを実行した場合、ECS がイメージを pull できずに起動に失敗する。  
 > 必ず push 後にタスクを実行すること。
+
+**検証3（filesystem バッファ化）を実施する場合**は、`:fs` イメージも追加でビルド & push し、`enable_filesystem_buffer = true` で `terraform apply` する。詳細は [検証手順書](docs/verification.md) の検証3を参照。
+
+```bash
+docker build -t "$ECR_URL:fs" -f docker/Dockerfile.fs docker/
+docker push "$ECR_URL:fs"
+```
 
 適用後、以下の出力値が表示される。
 
