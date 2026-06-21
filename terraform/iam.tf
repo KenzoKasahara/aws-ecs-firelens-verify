@@ -37,9 +37,9 @@ data "aws_iam_policy_document" "task_policy" {
   }
 
   statement {
-    sid     = "S3PutLogs"
-    effect  = "Allow"
-    actions = ["s3:PutObject"]
+    sid       = "S3PutLogs"
+    effect    = "Allow"
+    actions   = ["s3:PutObject"]
     resources = ["${aws_s3_bucket.verify_logs.arn}/*"]
   }
 }
