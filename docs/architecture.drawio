@@ -1,6 +1,6 @@
 <mxfile host="65bd71144e">
     <diagram id="M9mVXk2_yEFTGEjhuk5M" name="ページ1">
-        <mxGraphModel dx="558" dy="599" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+        <mxGraphModel dx="802" dy="513" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
             <root>
                 <mxCell id="0"/>
                 <mxCell id="1" parent="0"/>
@@ -18,22 +18,27 @@
                         <mxRectangle x="30" y="80" width="250" height="30" as="alternateBounds"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="log_router" value="log_router&#xa;Fluent Bit 3&#xa;(FireLens sidecar)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ecs;labelBackgroundColor=#ffffff;sketch=0;fontStyle=1;fontSize=10;fillColor=#ED7100;strokeColor=#ffffff;fontColor=#232F3E;spacingBottom=-130;" parent="ecs_task_group" vertex="1">
-                    <mxGeometry x="180" y="62.307692307692314" width="78" height="81" as="geometry"/>
-                </mxCell>
-                <mxCell id="app_container" value="app&#xa;httpd:2.4&#xa;(awsfirelens)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ecs;labelBackgroundColor=#ffffff;sketch=0;fontStyle=1;fontSize=10;fillColor=#ED7100;strokeColor=#ffffff;fontColor=#232F3E;spacingBottom=-130;" parent="ecs_task_group" vertex="1">
-                    <mxGeometry x="180" y="280.3846153846154" width="78" height="81" as="geometry"/>
-                </mxCell>
-                <mxCell id="e1" value="awsfirelens" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;" parent="ecs_task_group" source="app_container" target="log_router" edge="1">
+                <mxCell id="6" style="edgeStyle=none;html=1;" edge="1" parent="ecs_task_group" source="2" target="3">
                     <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="7" value="&lt;span style=&quot;color: rgb(0, 0, 0);&quot;&gt;awsfirelens&lt;/span&gt;" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="6">
+                    <mxGeometry x="0.1931" relative="1" as="geometry">
+                        <mxPoint y="28" as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="2" value="app&#xa;httpd:2.4&#xa;(awsfirelens)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#ED7100;strokeColor=default;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;fontSize=12;fontStyle=0;aspect=fixed;pointerEvents=1;shape=mxgraph.aws4.container_1;shadow=0;labelBackgroundColor=default;" vertex="1" parent="ecs_task_group">
+                    <mxGeometry x="188.81" y="305" width="60.39" height="39" as="geometry"/>
+                </mxCell>
+                <mxCell id="3" value="log_router&#xa;Fluent Bit 3&#xa;(FireLens sidecar)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#ED7100;strokeColor=default;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;fontSize=12;fontStyle=0;aspect=fixed;pointerEvents=1;shape=mxgraph.aws4.container_1;shadow=0;labelBackgroundColor=default;" vertex="1" parent="ecs_task_group">
+                    <mxGeometry x="188.81" y="85" width="60.39" height="39" as="geometry"/>
                 </mxCell>
                 <mxCell id="ecs_cluster" value="ECS Cluster&#xa;firelens-verify" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ecs;labelBackgroundColor=#ffffff;sketch=0;fontStyle=1;fontSize=10;fillColor=#ED7100;strokeColor=#ffffff;fontColor=#232F3E;spacingBottom=-120;" parent="aws_cloud" vertex="1">
                     <mxGeometry x="40" y="685.3846153846155" width="78" height="81" as="geometry"/>
                 </mxCell>
-                <mxCell id="cw_app" value="CloudWatch Logs&#xa;/aws/ecs/.../app&#xa;retention: 1 day" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudwatch;labelBackgroundColor=#ffffff;sketch=0;fontStyle=1;fontSize=10;fillColor=#E7157B;strokeColor=#ffffff;fontColor=#232F3E;spacingBottom=-130;" parent="aws_cloud" vertex="1">
+                <mxCell id="cw_app" value="CloudWatch Logs&#xa;app" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudwatch;labelBackgroundColor=#ffffff;sketch=0;fontStyle=1;fontSize=10;fillColor=#E7157B;strokeColor=#ffffff;fontColor=#232F3E;spacingBottom=-130;" parent="aws_cloud" vertex="1">
                     <mxGeometry x="700" y="29.99769230769231" width="78" height="81" as="geometry"/>
                 </mxCell>
-                <mxCell id="s3_logs" value="S3 Bucket&#xa;${project}-logs-${suffix}&#xa;(multi-dest verification)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;labelBackgroundColor=#ffffff;sketch=0;fontStyle=1;fontSize=10;fillColor=#27AE60;strokeColor=#ffffff;fontColor=#232F3E;spacingBottom=-120;" parent="aws_cloud" vertex="1">
+                <mxCell id="s3_logs" value="S3 Bucket" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;labelBackgroundColor=#ffffff;sketch=0;fontStyle=1;fontSize=10;fillColor=#27AE60;strokeColor=#ffffff;fontColor=#232F3E;spacingBottom=-120;" parent="aws_cloud" vertex="1">
                     <mxGeometry x="700" y="540.0015384615385" width="78" height="81" as="geometry"/>
                 </mxCell>
                 <mxCell id="iam_task_role" value="IAM Task Role&#xa;CW Logs Write&#xa;+ S3 PutObject" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.role;labelBackgroundColor=#ffffff;sketch=0;fontStyle=1;fontSize=10;fillColor=#DD344C;strokeColor=#ffffff;fontColor=#232F3E;spacingBottom=-120;" parent="aws_cloud" vertex="1">
@@ -42,25 +47,28 @@
                 <mxCell id="iam_exec_role" value="IAM Execution Role&#xa;Pull images&#xa;+ Log router CW Write" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.role;labelBackgroundColor=#ffffff;sketch=0;fontStyle=1;fontSize=10;fillColor=#DD344C;strokeColor=#ffffff;fontColor=#232F3E;spacingBottom=-120;" parent="aws_cloud" vertex="1">
                     <mxGeometry x="490" y="685.3846153846155" width="78" height="81" as="geometry"/>
                 </mxCell>
-                <mxCell id="cw_router" value="CloudWatch Logs&#xa;/aws/ecs/.../log-router&#xa;retention: 1 day" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudwatch;labelBackgroundColor=#ffffff;sketch=0;fontStyle=1;fontSize=10;fillColor=#E7157B;strokeColor=#ffffff;fontColor=#232F3E;spacingBottom=-120;" parent="aws_cloud" vertex="1">
+                <mxCell id="cw_router" value="CloudWatch Logs&#xa;log-router" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudwatch;labelBackgroundColor=#ffffff;sketch=0;fontStyle=1;fontSize=10;fillColor=#E7157B;strokeColor=#ffffff;fontColor=#232F3E;spacingBottom=-120;" parent="aws_cloud" vertex="1">
                     <mxGeometry x="700" y="330.0038461538462" width="78" height="81" as="geometry"/>
                 </mxCell>
-                <mxCell id="e4" value="S3 output (verification)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;" parent="1" source="log_router" target="s3_logs" edge="1">
-                    <mxGeometry x="0.8638" relative="1" as="geometry">
-                        <Array as="points">
-                            <mxPoint x="900" y="258"/>
-                        </Array>
-                        <mxPoint as="offset"/>
-                    </mxGeometry>
-                </mxCell>
-                <mxCell id="e2" value="cloudwatch_logs plugin" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;" parent="1" source="log_router" target="cw_app" edge="1">
-                    <mxGeometry x="0.7526" y="-1" relative="1" as="geometry">
-                        <mxPoint as="offset"/>
-                    </mxGeometry>
-                </mxCell>
-                <mxCell id="e3" value="awslogs (startup)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;" parent="1" source="log_router" target="cw_router" edge="1">
+                <mxCell id="e3" value="awslogs (startup)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=1.013;exitY=0.469;exitDx=0;exitDy=0;exitPerimeter=0;" parent="aws_cloud" source="3" target="cw_router" edge="1">
                     <mxGeometry x="0.8335" relative="1" as="geometry">
                         <mxPoint as="offset"/>
+                        <mxPoint x="308" y="237.79999999999995" as="sourcePoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e2" value="cloudwatch_logs plugin" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=1.013;exitY=0.469;exitDx=0;exitDy=0;exitPerimeter=0;" parent="aws_cloud" source="3" target="cw_app" edge="1">
+                    <mxGeometry x="0.7526" y="-1" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                        <mxPoint x="308" y="237.79999999999995" as="sourcePoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e4" value="S3 output (verification)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;" parent="aws_cloud" source="3" target="s3_logs" edge="1">
+                    <mxGeometry x="0.8638" relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="740" y="238"/>
+                        </Array>
+                        <mxPoint as="offset"/>
+                        <mxPoint x="308" y="237.79999999999995" as="sourcePoint"/>
                     </mxGeometry>
                 </mxCell>
                 <mxCell id="e5" value="task_role_arn" style="edgeStyle=orthogonalEdgeStyle;dashed=1;rounded=0;orthogonalLoop=1;jettySize=auto;" parent="1" source="iam_task_role" target="ecs_task_group" edge="1">
