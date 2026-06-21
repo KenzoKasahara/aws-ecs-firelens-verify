@@ -55,7 +55,7 @@ SUBNET=subnet-XXXX   # ↑ の出力から設定
 | 検証1・2・4 | `false`（既定） | memory バッファ + `extra.conf` を `@INCLUDE`（`:latest` イメージ） |
 | 検証3 | `true` | filesystem バッファ + フル設定を CMD で読み込み（`:fs` イメージ） |
 
-> **注（検証2・3 共通）**: 欠落を再現するため、`terraform.tfvars` で **`app_log_driver_buffer_limit`** を設定しておく（例: `8192`）。これは Docker→Fluent Bit 間のバッファ行数で、`enable_filesystem_buffer` とは独立に効く。**50MB 相当（約5,120行）より大きく**しないと `overlimit` が出ない点に注意（小さすぎると Docker 段で先に破棄される）。検証2・3 とも同じ値で実行し、差は `enable_filesystem_buffer` のみにする。値の決め方の詳細は[検証2の手順](#手順検証2)を参照。
+> **注（検証2・3 共通）**: 欠落を再現するため、`terraform.tfvars` で **`app_log_driver_buffer_limit`** を設定しておく（例: `8192`）。これは Docker→Fluent Bit 間のバッファ行数で、`enable_filesystem_buffer` とは独立に効く。検証2・3 とも同じ値で実行し、差は `enable_filesystem_buffer` のみにする。値の決め方の詳細は[検証2の手順](#手順検証2)を参照。
 
 ### 切り替え手順
 
@@ -114,14 +114,14 @@ aws-vault exec <profile> -- aws logs tail "$APP_LOG" --follow --region "$REGION"
 
 ## 検証2｜mem buf overlimit でログ欠落
 
-**仮説**: 既定（memory バッファ、`Mem_Buf_Limit 50MB`）で大量ログを高速に流すと、Fluent Bit の forward input が pause され、さらに Docker→Fluent Bit 間のドライババッファ（`log-driver-buffer-limit`）が溢れるとドライバがメッセージを破棄するため、ログが欠落する。OOMKill はバックプレッシャーにより発生しない。
+**仮説**: 既定（`storage.type memory` のメモリバッファ）で大量ログを高速に流すと、Fluent Bit の forward input がメモリバッファ上限に達して pause され、さらに Docker→Fluent Bit 間のドライババッファ（`log-driver-buffer-limit`）が溢れるとドライバがメッセージを破棄するため、ログが欠落する。OOMKill はバックプレッシャーにより発生しない。
 
 ### 手順（検証2）
 
-> **前提**: `terraform.tfvars` で **`app_log_driver_buffer_limit`** を設定して `apply` 済みであること。値の取り方が肝心で、欠落点が直列2段（`app → Docker バッファ(行数) → FB forward input(50MB)`）あるため、次の **2条件を両方**満たす必要がある:
+> **前提**: `terraform.tfvars` で **`app_log_driver_buffer_limit`** を設定して `apply` 済みであること。値の取り方が肝心で、欠落点が直列2段（`app → Docker バッファ(行数) → FB forward input(メモリバッファ)`）あるため、次の **2条件を両方**満たす必要がある:
 >
-> 1. **`overlimit` を出す**: `app_log_driver_buffer_limit` を **50MB 相当（10KB 行で約 5,120 行）より大きく**する（例 `8192`）。小さすぎると Docker 段で先に破棄され、FB の forward input が 50MB に達せず `mem buf overlimit` が出ない。逆に既定の `1048576` 行のままだと大きすぎて破棄されず欠落もしない。
-> 2. **欠落を出す**: 投入量 `N`×10KB を **`(50MB + app_log_driver_buffer_limit × 10KB)` より十分大きく**する。FB が 50MB で pause している間に Docker バッファが溢れて破棄される。
+> 1. **`overlimit` を出す**: `app_log_driver_buffer_limit` を **FB forward input のメモリバッファ容量（行数換算）より大きく**する（実測では `8192` で再現）。小さすぎると Docker 段で先に破棄され、FB の forward input がメモリ上限に達せず `mem buf overlimit` が出ない。
+> 2. **欠落を出す**: 投入量 `N`×10KB を **FB のメモリバッファ容量と Docker バッファ（`app_log_driver_buffer_limit × 10KB`）の合計より十分大きく**する。FB が pause している間に Docker バッファが溢れて破棄される。
 
 ```bash
 export MSYS_NO_PATHCONV=1       # Windows Git Bashの場合のみ必要
@@ -130,7 +130,7 @@ export MSYS2_ARG_CONV_EXCL="*"  # Windows Git Bashの場合のみ必要
 # 計測開始時刻を UTC で控える（後段の get-metric-statistics の --start-time に使う）
 START=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-# 投入行数。欠落には N×10KB > (50MB + app_log_driver_buffer_limit×10KB) が必要（前提の注参照）。
+# 投入行数。欠落には N×10KB が (FBメモリバッファ容量 + app_log_driver_buffer_limit×10KB) を十分超える必要がある（前提の注参照）。
 # 欠落幅が小さければ増やす。検証3 と必ず同じ値にする。
 N=100000
 
@@ -175,9 +175,9 @@ aws-vault exec <profile> -- aws cloudwatch get-metric-statistics \
 ### 確認ポイント（検証2）
 
 > **背景**:  
-> ログは app の stdout →**Docker ログドライバ（awsfirelens）のバッファ**→**Fluent Bit の forward input（`Mem_Buf_Limit 50MB`）**→ CloudWatch と流れる。欠落点は次の 2 か所:
+> ログは app の stdout →**Docker ログドライバ（awsfirelens）のバッファ**→**Fluent Bit の forward input（`storage.type memory` の既定メモリバッファ）**→ CloudWatch と流れる。欠落点は次の 2 か所:
 >
-> 1. **Fluent Bit forward input** — バッファが 50 MB を超えると input が pause され、pause 中の新規レコードは失われる（[AWS: メモリバッファリング（既定）](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/firelens-docker-buffer-limit.html)）。  
+> 1. **Fluent Bit forward input** — メモリバッファが上限に達すると input が pause され、pause 中の新規レコードは失われる（[AWS: メモリバッファリング（既定）](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/firelens-docker-buffer-limit.html)）。  
 > 2. **Docker ドライバのバッファ** — `log-driver-buffer-limit`（**既定 1,048,576 行**）が溢れると Docker が古いメッセージを破棄する（[AWS: Docker バッファ制限の設定](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/firelens-docker-buffer-limit.html)）。awsfirelens は実質ノンブロッキング（溢れたら破棄）で、ブロッキングではない。  
 > いずれの破棄も OOMKill は起こさない（バックプレッシャーで抑制される）。
 
@@ -193,7 +193,7 @@ aws-vault exec <profile> -- aws cloudwatch get-metric-statistics \
 | OOMKill | 発生しない | **発生しない** |
 | 到達行数 | < `N`（欠落あり） | 90,550 < 100,000 |
 
-**結論**: `Mem_Buf_Limit 50MB` 超過で input が pause（バックプレッシャー）し OOMKill は抑制されるが、pause 中の新規レコードおよび Docker ドライババッファ（`log-driver-buffer-limit`）の溢れ分は破棄されるため、ログが欠落する。
+**結論**: `storage.type memory` 既定のメモリバッファが上限に達して input が pause（バックプレッシャー）し OOMKill は抑制されるが、pause 中の新規レコードおよび Docker ドライババッファ（`log-driver-buffer-limit`）の溢れ分は破棄されるため、ログが欠落する。
 
 ![検証結果2-1](images/verify-2-1.png)
 ![検証結果2-2](images/verify-2-2.png)
@@ -321,7 +321,7 @@ aws-vault exec <profile> -- aws cloudwatch get-metric-statistics \
 | `mem buf overlimit` | 発生（pause/resume） | 発生無し |
 | 到達行数 | 90,550 | 100,000 |
 
-**結論**: 仮説どおり、forward input を `storage.type filesystem` に切り替えることでログ欠落は解消した。検証2（memory バッファ）では同一負荷 `N=100,000` 行に対し到達は 90,550 行にとどまり `mem buf overlimit` による pause/resume と約 9,450 行（≒9.5%）の欠落が発生したが、検証3（filesystem バッファ）では `overlimit` が一切発生せず到達行数が `N` と完全に一致（100,000 行）した。50MB のメモリ上限を超えた分をディスクへ退避できるため、バックプレッシャーによる pause と pause 中レコードのドロップが起きなくなったことを示す。
+**結論**: 仮説どおり、forward input を `storage.type filesystem` に切り替えることでログ欠落は解消した。検証2（memory バッファ）では同一負荷 `N=100,000` 行に対し到達は 90,550 行にとどまり `mem buf overlimit` による pause/resume と約 9,450 行（≒9.5%）の欠落が発生したが、検証3（filesystem バッファ）では `overlimit` が一切発生せず到達行数が `N` と完全に一致（100,000 行）した。
 
 ![検証結果3-1](images/verify-3-1.png)
 ![検証結果3-2](images/verify-3-2.png)
